@@ -17,13 +17,14 @@
 
 package com.nageoffer.ai.ragent.rag.mq;
 
+import com.fasterxml.jackson.databind.ObjectMapper;
 import com.nageoffer.ai.ragent.framework.mq.MessageWrapper;
 import com.nageoffer.ai.ragent.rag.mq.event.MessageFeedbackEvent;
 import com.nageoffer.ai.ragent.rag.service.MessageFeedbackService;
 import lombok.RequiredArgsConstructor;
 import lombok.extern.slf4j.Slf4j;
-import org.apache.rocketmq.spring.annotation.RocketMQMessageListener;
-import org.apache.rocketmq.spring.core.RocketMQListener;
+import org.springframework.amqp.core.Message;
+import org.springframework.amqp.rabbit.annotation.RabbitListener;
 import org.springframework.stereotype.Component;
 
 /**
@@ -32,20 +33,27 @@ import org.springframework.stereotype.Component;
 @Slf4j
 @Component
 @RequiredArgsConstructor
-@RocketMQMessageListener(
-        topic = "message-feedback_topic${unique-name:}",
-        consumerGroup = "message-feedback_cg${unique-name:}"
-)
-public class MessageFeedbackConsumer implements RocketMQListener<MessageWrapper<MessageFeedbackEvent>> {
+public class MessageFeedbackConsumer {
 
     private final MessageFeedbackService feedbackService;
+    private final ObjectMapper objectMapper;
 
-    @Override
-    public void onMessage(MessageWrapper<MessageFeedbackEvent> message) {
-        MessageFeedbackEvent event = message.getBody();
+    @RabbitListener(queues = "${rabbitmq.message-feedback.queue}")
+    public void onMessage(Message message) {
+        try {
+            MessageWrapper<MessageFeedbackEvent> wrapper = objectMapper.readValue(
+                    message.getBody(),
+                    objectMapper.getTypeFactory().constructParametricType(MessageWrapper.class, MessageFeedbackEvent.class)
+            );
 
-        log.info("[消费者] 开始处理点赞/点踩事件，messageId: {}, userId: {}, vote: {}, keys: {}",
-                event.getMessageId(), event.getUserId(), event.getVote(), message.getKeys());
-        feedbackService.submitFeedbackByEvent(event);
+            MessageFeedbackEvent event = wrapper.getBody();
+
+            log.info("[消费者] 开始处理点赞/点踩事件，messageId: {}, userId: {}, vote: {}, keys: {}",
+                    event.getMessageId(), event.getUserId(), event.getVote(), wrapper.getKeys());
+            feedbackService.submitFeedbackByEvent(event);
+        } catch (Exception e) {
+            log.error("[消费者] 消息处理失败", e);
+            throw new RuntimeException("消息处理失败", e);
+        }
     }
 }

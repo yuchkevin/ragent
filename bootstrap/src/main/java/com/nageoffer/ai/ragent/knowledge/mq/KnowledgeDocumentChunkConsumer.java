@@ -17,6 +17,7 @@
 
 package com.nageoffer.ai.ragent.knowledge.mq;
 
+import com.fasterxml.jackson.databind.ObjectMapper;
 import com.nageoffer.ai.ragent.framework.context.LoginUser;
 import com.nageoffer.ai.ragent.framework.context.UserContext;
 import com.nageoffer.ai.ragent.framework.mq.MessageWrapper;
@@ -24,8 +25,8 @@ import com.nageoffer.ai.ragent.knowledge.mq.event.KnowledgeDocumentChunkEvent;
 import com.nageoffer.ai.ragent.knowledge.service.KnowledgeDocumentService;
 import lombok.RequiredArgsConstructor;
 import lombok.extern.slf4j.Slf4j;
-import org.apache.rocketmq.spring.annotation.RocketMQMessageListener;
-import org.apache.rocketmq.spring.core.RocketMQListener;
+import org.springframework.amqp.core.Message;
+import org.springframework.amqp.rabbit.annotation.RabbitListener;
 import org.springframework.stereotype.Component;
 
 /**
@@ -35,25 +36,32 @@ import org.springframework.stereotype.Component;
 @Slf4j
 @Component
 @RequiredArgsConstructor
-@RocketMQMessageListener(
-        topic = "knowledge-document-chunk_topic${unique-name:}",
-        consumerGroup = "knowledge-document-chunk_cg${unique-name:}"
-)
-public class KnowledgeDocumentChunkConsumer implements RocketMQListener<MessageWrapper<KnowledgeDocumentChunkEvent>> {
+public class KnowledgeDocumentChunkConsumer {
 
     private final KnowledgeDocumentService documentService;
+    private final ObjectMapper objectMapper;
 
-    @Override
-    public void onMessage(MessageWrapper<KnowledgeDocumentChunkEvent> message) {
-        KnowledgeDocumentChunkEvent event = message.getBody();
-
-        log.info("[消费者] 开始消费文档分块任务，docId={}, keys={}", event.getDocId(), message.getKeys());
-
-        UserContext.set(LoginUser.builder().username(event.getOperator()).build());
+    @RabbitListener(queues = "${rabbitmq.knowledge-document-chunk.queue}")
+    public void onMessage(Message message) {
         try {
-            documentService.executeChunk(event.getDocId());
-        } finally {
-            UserContext.clear();
+            MessageWrapper<KnowledgeDocumentChunkEvent> wrapper = objectMapper.readValue(
+                    message.getBody(),
+                    objectMapper.getTypeFactory().constructParametricType(MessageWrapper.class, KnowledgeDocumentChunkEvent.class)
+            );
+
+            KnowledgeDocumentChunkEvent event = wrapper.getBody();
+
+            log.info("[消费者] 开始消费文档分块任务，docId={}, keys={}", event.getDocId(), wrapper.getKeys());
+
+            UserContext.set(LoginUser.builder().username(event.getOperator()).build());
+            try {
+                documentService.executeChunk(event.getDocId());
+            } finally {
+                UserContext.clear();
+            }
+        } catch (Exception e) {
+            log.error("[消费者] 消息处理失败", e);
+            throw new RuntimeException("消息处理失败", e);
         }
     }
 }

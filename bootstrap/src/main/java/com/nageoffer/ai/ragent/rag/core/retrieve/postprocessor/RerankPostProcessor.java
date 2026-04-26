@@ -56,18 +56,20 @@ public class RerankPostProcessor implements SearchResultPostProcessor {
     }
 
     @Override
-    public List<RetrievedChunk> process(List<RetrievedChunk> chunks,
+    public List<RetrievedChunk> process(List<RetrievedChunk> chunks, // 多路召回回来的所有文档
                                         List<SearchChannelResult> results,
                                         SearchContext context) {
         if (chunks.isEmpty()) {
             log.info("Chunk 列表为空，跳过 Rerank");
             return chunks;
         }
-
+        // ==========================
+        // 核心：调用 rerank 模型重排序
+        // ==========================
         return rerankService.rerank(
-                context.getMainQuestion(),
-                chunks,
-                context.getTopK()
+                context.getMainQuestion(), // 用户问题
+                chunks,// 多路召回的文档列表
+                context.getTopK() // 保留前几条
         );
     }
 }

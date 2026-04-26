@@ -80,6 +80,7 @@ public class RetrievalEngine {
      */
     @RagTraceNode(name = "retrieval-engine", type = "RETRIEVE")
     public RetrievalContext retrieve(List<SubQuestionIntent> subIntents, int topK) {
+        //// 无子问题 → 直接返回空上下文
         if (CollUtil.isEmpty(subIntents)) {
             return RetrievalContext.builder()
                     .mcpContext("")
@@ -87,7 +88,7 @@ public class RetrievalEngine {
                     .intentChunks(Map.of())
                     .build();
         }
-
+// 并行执行每个子问题的检索任务
         int finalTopK = topK > 0 ? topK : DEFAULT_TOP_K;
         List<CompletableFuture<SubQuestionContext>> tasks = subIntents.stream()
                 .map(si -> CompletableFuture.supplyAsync(
@@ -98,6 +99,7 @@ public class RetrievalEngine {
                         ragContextExecutor
                 ))
                 .toList();
+        // 等待所有并行任务完成
         List<SubQuestionContext> contexts = tasks.stream()
                 .map(CompletableFuture::join)
                 .toList();
@@ -105,7 +107,7 @@ public class RetrievalEngine {
         StringBuilder kbBuilder = new StringBuilder();
         StringBuilder mcpBuilder = new StringBuilder();
         Map<String, List<RetrievedChunk>> mergedIntentChunks = new ConcurrentHashMap<>();
-
+//核心：把所有结果合并成一份大材料
         for (SubQuestionContext context : contexts) {
             if (StrUtil.isNotBlank(context.kbContext())) {
                 appendSection(kbBuilder, context.question(), context.kbContext());
@@ -117,7 +119,7 @@ public class RetrievalEngine {
                 mergedIntentChunks.putAll(context.intentChunks());
             }
         }
-
+//返回最终检索上下文
         return RetrievalContext.builder()
                 .mcpContext(mcpBuilder.toString().trim())
                 .kbContext(kbBuilder.toString().trim())
@@ -126,16 +128,22 @@ public class RetrievalEngine {
     }
 
     private SubQuestionContext buildSubQuestionContext(SubQuestionIntent intent, int topK) {
-        List<NodeScore> kbIntents = filterKbIntents(intent.nodeScores());
-        List<NodeScore> mcpIntents = filterMCPIntents(intent.nodeScores());
-
+        //把意图分成两类：知识库 / 工具
+        List<NodeScore> kbIntents = filterKbIntents(intent.nodeScores()); // 查知识库的意图
+        List<NodeScore> mcpIntents = filterMCPIntents(intent.nodeScores());// 调工具的意图
+        //真正的多路检索 + 重排序（核心中的核心）
         KbResult kbResult = retrieveAndRerank(intent, kbIntents, topK);
 
         String mcpContext = CollUtil.isNotEmpty(mcpIntents)
                 ? executeMcpAndMerge(intent.subQuestion(), mcpIntents)
                 : "";
 
-        return new SubQuestionContext(intent.subQuestion(), kbResult.groupedContext(), mcpContext, kbResult.intentChunks());
+        return new SubQuestionContext(
+                intent.subQuestion(),    // 子问题
+                kbResult.groupedContext(), // 多路检索后的知识库文本
+                mcpContext,              // 工具调用结果文本
+                kbResult.intentChunks()   // 原文片段（用于引用）
+        );
     }
 
     /**

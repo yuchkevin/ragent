@@ -199,9 +199,11 @@ public class KnowledgeDocumentServiceImpl implements KnowledgeDocumentService {
     }
 
     private void runChunkTask(KnowledgeDocumentDO documentDO) {
+        //t_knowledge_document  KnowledgeDocumentDO
+        // 1. 拿到文档ID & 处理模式（普通分块 / 流水线模式）
         String docId = documentDO.getId();
         ProcessMode processMode = ProcessMode.normalize(documentDO.getProcessMode());
-
+// 2. 插入一条【分块执行日志】→ 对应你表：t_knowledge_document_chunk_log
         KnowledgeDocumentChunkLogDO chunkLog = KnowledgeDocumentChunkLogDO.builder()
                 .docId(docId)
                 .status(DocumentStatus.RUNNING.getCode())
@@ -211,7 +213,7 @@ public class KnowledgeDocumentServiceImpl implements KnowledgeDocumentService {
                 .startTime(new Date())
                 .build();
         chunkLogMapper.insert(chunkLog);
-
+// 计时用（统计各阶段耗时）
         long totalStartTime = System.currentTimeMillis();
         long extractDuration = 0;
         long chunkDuration = 0;
@@ -219,7 +221,10 @@ public class KnowledgeDocumentServiceImpl implements KnowledgeDocumentService {
         long persistDuration = 0;
 
         try {
-            List<VectorChunk> chunkResults;
+            // ==============================================
+            // 3. 两种处理模式
+            // ==============================================
+            List<VectorChunk> chunkResults;   //t_knowledge_chunk
             if (ProcessMode.PIPELINE == processMode) {
                 long start = System.currentTimeMillis();
                 chunkResults = runPipelineProcess(documentDO);
@@ -231,12 +236,16 @@ public class KnowledgeDocumentServiceImpl implements KnowledgeDocumentService {
                 embedDuration = result.embedDuration();
                 chunkResults = result.chunks();
             }
-
+// ==============================================
+            // 4. 原子性保存：分块文本 + 向量
+            // ==============================================
             long persistStart = System.currentTimeMillis();
             String collectionName = resolveCollectionName(documentDO.getKbId());
             int savedCount = persistChunksAndVectorsAtomically(collectionName, docId, chunkResults);
             persistDuration = System.currentTimeMillis() - persistStart;
-
+            // ==============================================
+            // 5. 执行成功 → 更新日志为成功状态
+            // ==============================================
             long totalDuration = System.currentTimeMillis() - totalStartTime;
             updateChunkLog(chunkLog.getId(), DocumentStatus.SUCCESS.getCode(), savedCount,
                     extractDuration, chunkDuration, embedDuration, persistDuration, totalDuration, null);
@@ -298,21 +307,33 @@ public class KnowledgeDocumentServiceImpl implements KnowledgeDocumentService {
      * 4 阶段中的前 3 阶段：Extract → Chunk → Embed
      */
     private ChunkProcessResult runChunkProcess(KnowledgeDocumentDO documentDO) {
-        ChunkingMode chunkingMode = ChunkingMode.fromValue(documentDO.getChunkStrategy());
-        KnowledgeBaseDO kbDO = knowledgeBaseMapper.selectById(documentDO.getKbId());
-        String embeddingModel = kbDO.getEmbeddingModel();
-        ChunkingOptions config = buildChunkingOptions(chunkingMode, documentDO);
+        // 1. 获取配置
+        ChunkingMode chunkingMode = ChunkingMode.fromValue(documentDO.getChunkStrategy());// 分块模式：固定大小/按章节/按语义
+        KnowledgeBaseDO kbDO = knowledgeBaseMapper.selectById(documentDO.getKbId());// 查知识库
+        String embeddingModel = kbDO.getEmbeddingModel();// 用哪个 embedding 模型
+        ChunkingOptions config = buildChunkingOptions(chunkingMode, documentDO); // 构建分块参数（大小、重叠等）
 
         long extractStart = System.currentTimeMillis();
+        // 打开文件流（从OSS/本地/MinIO等）
         try (InputStream is = fileStorageService.openStream(documentDO.getFileUrl())) {
+            // ==========================================
+            // 2. 【核心步骤1】抽取文档纯文本（PDF/Word/Excel…全部转文字）
+            // ==========================================
             String text = parserSelector.select(ParserType.TIKA.getType()).extractText(is, documentDO.getDocName());
             long extractDuration = System.currentTimeMillis() - extractStart;
 
+
+            // ==========================================
+            // 3. 【核心步骤2】文本分块（切成一段段）
+            // ==========================================
             ChunkingStrategy chunkingStrategy = chunkingStrategyFactory.requireStrategy(chunkingMode);
             long chunkStart = System.currentTimeMillis();
             List<VectorChunk> chunks = chunkingStrategy.chunk(text, config);
             long chunkDuration = System.currentTimeMillis() - chunkStart;
 
+            // ==========================================
+            // 4. 【核心步骤3】向量化（生成 embedding 向量）
+            // ==========================================
             long embedStart = System.currentTimeMillis();
             chunkEmbeddingService.embed(chunks, embeddingModel);
             long embedDuration = System.currentTimeMillis() - embedStart;

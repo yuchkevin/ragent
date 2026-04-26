@@ -73,7 +73,7 @@ public class MultiChannelRetrievalEngine {
             return List.of();
         }
 
-        // 【阶段2：后置处理器链】
+        // 【阶段2：后置处理器链】【后置处理器链】（融合 + 去重 + 重排）
         return executePostProcessors(channelResults, context);
     }
 

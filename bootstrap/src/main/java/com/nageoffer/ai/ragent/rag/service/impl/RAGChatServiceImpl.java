@@ -80,6 +80,7 @@ public class RAGChatServiceImpl implements RAGChatService {
     @Override
     @ChatRateLimit
     public void streamChat(String question, String conversationId, Boolean deepThinking, SseEmitter emitter) {
+        // 会话 ID 不存在则创建
         String actualConversationId = StrUtil.isBlank(conversationId) ? IdUtil.getSnowflakeNextIdStr() : conversationId;
         String taskId = StrUtil.isBlank(RagTraceContext.getTaskId())
                 ? IdUtil.getSnowflakeNextIdStr()
@@ -88,20 +89,21 @@ public class RAGChatServiceImpl implements RAGChatService {
         boolean thinkingEnabled = Boolean.TRUE.equals(deepThinking);
 
         StreamCallback callback = callbackFactory.createChatEventHandler(emitter, actualConversationId, taskId);
-
+        // 加载历史对话 + 追加当前问题
         String userId = UserContext.getUserId();
         List<ChatMessage> history = memoryService.loadAndAppend(actualConversationId, userId, ChatMessage.user(question));
-
+        //查询改写（超级关键！RAG 必做）
         RewriteResult rewriteResult = queryRewriteService.rewriteWithSplit(question, history);
+        //意图识别（分流决策）
         List<SubQuestionIntent> subIntents = intentResolver.resolve(rewriteResult);
-
+//歧义检测（反问消歧）
         GuidanceDecision guidanceDecision = guidanceService.detectAmbiguity(rewriteResult.rewrittenQuestion(), subIntents);
         if (guidanceDecision.isPrompt()) {
             callback.onContent(guidanceDecision.getPrompt());
             callback.onComplete();
             return;
         }
-
+        //系统意图（不需要检索，直接回答）
         boolean allSystemOnly = subIntents.stream()
                 .allMatch(si -> intentResolver.isSystemOnly(si.nodeScores()));
         if (allSystemOnly) {
@@ -115,7 +117,7 @@ public class RAGChatServiceImpl implements RAGChatService {
             taskManager.bindHandle(taskId, handle);
             return;
         }
-
+//正式进入 RAG 检索（多路召回）//RAG 核心中的核心！
         RetrievalContext ctx = retrievalEngine.retrieve(subIntents, DEFAULT_TOP_K);
         if (ctx.isEmpty()) {
             String emptyReply = "未检索到与问题相关的文档内容。";
@@ -124,17 +126,18 @@ public class RAGChatServiceImpl implements RAGChatService {
             return;
         }
 
-        // 聚合所有意图用于 prompt 规划
+        // 聚合所有意图用于 prompt 规划//合并意图 → 流式调用大模型回答
         IntentGroup mergedGroup = intentResolver.mergeIntentGroup(subIntents);
-
+        //返回一个 “取消手柄”StreamCancellationHandle
         StreamCancellationHandle handle = streamLLMResponse(
-                rewriteResult,
-                ctx,
-                mergedGroup,
-                history,
-                thinkingEnabled,
-                callback
+                rewriteResult,    // 改写后的清晰问题
+                ctx,              // 多路检索回来的知识库答案（核心材料）
+                mergedGroup,      // 合并后的总意图（怎么回答）
+                history,          // 历史对话（多轮记忆）
+                thinkingEnabled,  // 是否深度思考
+                callback          // 把结果实时推送给前端的发射器
         );
+        //绑定取消手柄
         taskManager.bindHandle(taskId, handle);
     }
 
@@ -166,28 +169,40 @@ public class RAGChatServiceImpl implements RAGChatService {
         return llmService.streamChat(req, callback);
     }
 
+    /**
+     * LLM 响应
+     * @param rewriteResult
+     * @param ctx
+     * @param intentGroup
+     * @param history
+     * @param deepThinking
+     * @param callback
+     * @return
+     */
     private StreamCancellationHandle streamLLMResponse(RewriteResult rewriteResult, RetrievalContext ctx,
                                                        IntentGroup intentGroup, List<ChatMessage> history,
                                                        boolean deepThinking, StreamCallback callback) {
         PromptContext promptContext = PromptContext.builder()
-                .question(rewriteResult.rewrittenQuestion())
-                .mcpContext(ctx.getMcpContext())
-                .kbContext(ctx.getKbContext())
-                .mcpIntents(intentGroup.mcpIntents())
-                .kbIntents(intentGroup.kbIntents())
-                .intentChunks(ctx.getIntentChunks())
+                .question(rewriteResult.rewrittenQuestion())  // 改写后的标准问题
+                .mcpContext(ctx.getMcpContext())              // 工具调用返回结果
+                .kbContext(ctx.getKbContext())                // 知识库检索到的所有文本
+                .mcpIntents(intentGroup.mcpIntents())         // 合并后的工具意图
+                .kbIntents(intentGroup.kbIntents())           // 合并后的知识库意图
+                .intentChunks(ctx.getIntentChunks())          // 原文片段（用于引用/溯源）
                 .build();
 
         List<ChatMessage> messages = promptBuilder.buildStructuredMessages(
-                promptContext,
-                history,
-                rewriteResult.rewrittenQuestion(),
-                rewriteResult.subQuestions()  // 传入子问题列表
+                promptContext,      // 上面的材料包
+                history,            // 历史对话（多轮记忆）
+                rewriteResult.rewrittenQuestion(),  // 最终问题
+                rewriteResult.subQuestions()        // 拆分的子问题
         );
+        // 这一步就是在做：组装最终给大模型的完整 prompt
+//构建大模型请求（设置 AI 性格）
         ChatRequest chatRequest = ChatRequest.builder()
-                .messages(messages)
-                .thinking(deepThinking)
-                .temperature(ctx.hasMcp() ? 0.3D : 0D)  // MCP 场景稍微放宽温度
+                .messages(messages)        // 上面拼好的对话
+                .thinking(deepThinking)    // 是否开启深度思考
+                .temperature(ctx.hasMcp() ? 0.3D : 0D)  // 温度：0=最严谨，不瞎编
                 .topP(ctx.hasMcp() ? 0.8D : 1D)
                 .build();
 

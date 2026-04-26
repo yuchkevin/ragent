@@ -49,11 +49,17 @@ public class IntentResolver {
     @Qualifier("intentClassifyThreadPoolExecutor")
     private final Executor intentClassifyExecutor;
 
+    /**
+     * 把子问题拿出来 → 并行给每个子问题做意图分类 → 返回所有子问题的意图
+     * @param rewriteResult
+     * @return
+     */
     @RagTraceNode(name = "intent-resolve", type = "INTENT")
     public List<SubQuestionIntent> resolve(RewriteResult rewriteResult) {
         List<String> subQuestions = CollUtil.isNotEmpty(rewriteResult.subQuestions())
                 ? rewriteResult.subQuestions()
                 : List.of(rewriteResult.rewrittenQuestion());
+        //核心：并行对每个子问题做意图识别
         List<CompletableFuture<SubQuestionIntent>> tasks = subQuestions.stream()
                 .map(q -> CompletableFuture.supplyAsync(
                         () -> new SubQuestionIntent(q, classifyIntents(q)),
@@ -81,7 +87,11 @@ public class IntentResolver {
                 && nodeScores.get(0).getNode() != null
                 && nodeScores.get(0).getNode().getKind() == SYSTEM;
     }
-
+/**
+ * 给每个子问题做意图识别
+ * @param question
+ * @return
+ */
     private List<NodeScore> classifyIntents(String question) {
         List<NodeScore> scores = intentClassifier.classifyTargets(question);
         return scores.stream()

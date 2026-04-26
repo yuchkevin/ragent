@@ -54,6 +54,13 @@ public class DeduplicationPostProcessor implements SearchResultPostProcessor {
         return true;  // 始终启用
     }
 
+    /**
+     * 去除重复块
+     * @param chunks  当前的 Chunk 列表（可能是上一个处理器的输出）
+     * @param results 原始的多通道检索结果（用于获取元信息）
+     * @param context 检索上下文
+     * @return
+     */
     @Override
     public List<RetrievedChunk> process(List<RetrievedChunk> chunks,
                                         List<SearchChannelResult> results,

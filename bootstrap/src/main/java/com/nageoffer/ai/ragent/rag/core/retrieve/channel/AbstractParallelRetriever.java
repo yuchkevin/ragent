@@ -61,20 +61,25 @@ public abstract class AbstractParallelRetriever<T> {
     public final List<RetrievedChunk> executeParallelRetrieval(String question,
                                                                List<T> targets,
                                                                int topK) {
-        // 1. 创建 Future 列表
+        // ================================
+        // 1. 给每个检索目标开一个异步任务
+        // ================================
         record RetrievalFuture<T>(T target, CompletableFuture<List<RetrievedChunk>> future) {
         }
 
         List<RetrievalFuture<T>> futures = targets.stream()
                 .map(target -> {
+                    // 重点：异步执行
                     CompletableFuture<List<RetrievedChunk>> future = CompletableFuture.supplyAsync(
-                            () -> createRetrievalTask(question, target, topK),
+                            () -> createRetrievalTask(question, target, topK),// 真正检索逻辑
                             executor
                     );
                     return new RetrievalFuture<>(target, future);
                 })
                 .toList();
-
+        // ================================
+        // 2. 等待所有任务执行完，合并结果
+        // ================================
         // 2. 收集结果并统计成功/失败数
         List<RetrievedChunk> allChunks = new ArrayList<>();
         int successCount = 0;

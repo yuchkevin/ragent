@@ -16,8 +16,8 @@ spring:
     driver-class-name: org.postgresql.Driver
     type: com.zaxxer.hikari.HikariDataSource
     username: postgres
-    password: postgres
-    url: jdbc:postgresql://127.0.0.1:5432/ragent?client_encoding=UTF8
+    password: 123456
+    url: jdbc:postgresql://47.115.213.60:5432/ragent?client_encoding=UTF8
     hikari:
       connection-timeout: 5000
       idle-timeout: 600000
@@ -28,15 +28,33 @@ spring:
 
   data:
     redis:
-      host: 127.0.0.1
+      host: 47.115.213.60
       port: 6379
-      password: 123456
+      password: Redis@2026
 
-rocketmq:
-  name-server: 127.0.0.1:9876
-  producer:
-    group: ragent-producer${unique-name:}_pg
-    send-message-timeout: 2000
+  rabbitmq:
+    host: 47.115.213.60
+    port: 5672
+    username: admin
+    password: 123456
+    publisher-confirm-type: correlated
+    publisher-returns: true
+    template:
+      mandatory: true
+
+rabbitmq:
+  message-feedback:
+    exchange: message-feedback_exchange
+    queue: message-feedback_queue
+    routing-key: message-feedback
+    dead-exchange: message-feedback_dlx
+    dead-queue: message-feedback_dlq
+  knowledge-document-chunk:
+    exchange: knowledge-document-chunk_exchange
+    queue: knowledge-document-chunk_queue
+    routing-key: knowledge-document-chunk
+    dead-exchange: knowledge-document-chunk_dlx
+    dead-queue: knowledge-document-chunk_dlq
 
 milvus:
   uri: http://localhost:19530
@@ -112,13 +130,13 @@ ai:
         embedding: /api/embed
     bailian:
       url: https://dashscope.aliyuncs.com
-      api-key: ${BAILIAN_API_KEY:}
+      api-key: sk-06fb9445f61a4e8a836ee22527813a56
       endpoints:
         chat: /compatible-mode/v1/chat/completions
         rerank: /api/v1/services/rerank/text-rerank/text-rerank
     siliconflow:
       url: https://api.siliconflow.cn
-      api-key: ${SILICONFLOW_API_KEY:}
+      api-key: sk-ovsotksycfjsoneuylxgwpjrwbvhgqjhznrxzstphvlbiaob
       endpoints:
         chat: /v1/chat/completions
         embedding: /v1/embeddings
@@ -180,7 +198,7 @@ ai:
         priority: 100
 
 rustfs:
-  url: http://localhost:9000
+  url: http://47.115.213.60:9000
   access-key-id: rustfsadmin
   secret-access-key: rustfsadmin
 

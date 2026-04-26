@@ -39,7 +39,7 @@ public class RAGChatController {
     private final RAGChatService ragChatService;
 
     /**
-     * 发起 SSE 流式对话
+     * 发起 SSE 流式对话  联合知识库进行对话
      */
     @IdempotentSubmit(
             key = "T(com.nageoffer.ai.ragent.framework.context.UserContext).getUserId()",

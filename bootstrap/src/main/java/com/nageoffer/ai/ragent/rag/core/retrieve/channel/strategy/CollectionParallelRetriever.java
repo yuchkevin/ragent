@@ -43,6 +43,7 @@ public class CollectionParallelRetriever extends AbstractParallelRetriever<Strin
     @Override
     protected List<RetrievedChunk> createRetrievalTask(String question, String collectionName, int topK) {
         try {
+            // 真正去检索！
             return retrieverService.retrieve(
                     RetrieveRequest.builder()
                             .collectionName(collectionName)
